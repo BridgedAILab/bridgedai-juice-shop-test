@@ -10,8 +10,10 @@ jobs:
     uses: ./.github/workflows/bridgedai-release-gate.yml
     with:
       environment: Production
-      organization-id: org_a402b4f0-ac68-4d15-91de-44cc67ce3ebd
-      bridgedai-api-url: https://api.bridgedai.io
-      policy: default-release-gate
+      organization-id: ${{ vars.BRIDGEDAI_ORG_ID || 'org_a402b4f0-ac68-4d15-91de-44cc67ce3ebd' }}
+      bridgedai-api-url: ${{ vars.BRIDGEDAI_API_URL || 'https://api.bridgedai.io' }}
+      project-id: ${{ vars.BRIDGEDAI_PROJECT_ID || 'proj_18139069-31bb-468f-8477-dc36cd54b33d' }}
+      policy: ${{ vars.BRIDGEDAI_POLICY || 'release-governance-standard' }}
     secrets:
+      BRIDGEDAI_API_KEY: ${{ secrets.BRIDGEDAI_API_KEY }}
       BRIDGEDAI_TOKEN: ${{ secrets.BRIDGEDAI_TOKEN }}
