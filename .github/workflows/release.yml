@@ -145,7 +145,7 @@ jobs:
           emit-demo-signals: false
       - name: "BridgedAI Register Build"
         id: bridgedai-register-build
-        uses: bridgedai-devsecops/register-build-action@v0.0.6-beta
+        uses: bridgedai-devsecops/register-build-action@v0.0.5-beta
         with:
           api-base: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
