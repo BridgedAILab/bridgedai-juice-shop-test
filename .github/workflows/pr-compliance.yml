@@ -466,7 +466,7 @@ jobs:
             }
 
       - name: "Slack Notification"
-        if: always() && steps.check.outputs.results && env.SLACK_WEBHOOK_URL != ''
+        if: always() && steps.check.outputs.results && env.SLACK_WEBHOOK_URL != null && env.SLACK_WEBHOOK_URL != ''
         uses: Gamesight/slack-workflow-status@68bf00d0dbdbcb206c278399aa1ef6c14f74347a #v1.3.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
