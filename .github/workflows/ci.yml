@@ -199,7 +199,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_DEFAULT_VERSION }}
       - name: "Install application"
-        if: github.repository == 'juice-shop/juice-shop' || (github.repository != 'juice-shop/juice-shop' && matrix.os == 'ubuntu-latest' && matrix.node-version == '24')
         run: npm install
       - name: "Execute server tests for each custom configuration"
         uses: nick-invision/retry@7152eba30c6575329ac0576536151aca5a72780e #v3.0.0
@@ -244,8 +243,8 @@ jobs:
           browser: ${{ matrix.browser }}
           start: npm start
           wait-on: http://localhost:3000
-          record: true
-          group: ${{ matrix.browser }} @ ${{ matrix.os }}
+          record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
+          group: ${{ secrets.CYPRESS_RECORD_KEY != '' && format('{0} @ {1}', matrix.browser, matrix.os) || '' }}
         env:
           SOLUTIONS_WEBHOOK: ${{ secrets.E2E_SOLUTIONS_WEBHOOK }}
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
@@ -259,8 +258,8 @@ jobs:
           browser: ${{ matrix.browser }}
           start: npm start
           wait-on: http://localhost:3000
-          record: true
-          group: ${{ matrix.browser }} @ ${{ matrix.os }}
+          record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
+          group: ${{ secrets.CYPRESS_RECORD_KEY != '' && format('{0} @ {1}', matrix.browser, matrix.os) || '' }}
         env:
           CYPRESS_CACHE_FOLDER: /Users/runner/Library/Caches/Cypress
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
@@ -309,9 +308,285 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #v4.2.2
       - name: "Execute smoke test on Docker"
         run: docker compose -f docker-compose.test.yml up --exit-code-from sut
+  bridgedai-governance:
+    name: "BridgedAI governance evidence"
+    runs-on: ubuntu-latest
+    needs:
+      - lint
+      - coding-challenge-rsn
+      - frontend-test
+      - server-test
+      - api-test
+      - custom-config-test
+      - e2e-test
+      - smoke-test
+      - docker-test
+    if: ${{ always() }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      security-events: read
+    env:
+      BRIDGEDAI_API_URL: ${{ vars.BRIDGEDAI_API_URL || 'https://api.bridgedai.io' }}
+      BRIDGEDAI_ORG_ID: ${{ vars.BRIDGEDAI_ORG_ID || 'org_a402b4f0-ac68-4d15-91de-44cc67ce3ebd' }}
+      BRIDGEDAI_PROJECT_ID: ${{ vars.BRIDGEDAI_PROJECT_ID || 'proj_18139069-31bb-468f-8477-dc36cd54b33d' }}
+      BRIDGEDAI_POLICY: ${{ vars.BRIDGEDAI_POLICY || 'release-governance-standard' }}
+      BRIDGEDAI_ENVIRONMENT: ${{ github.ref == 'refs/heads/master' && 'Production' || 'CI' }}
+      BRIDGEDAI_GATE_MODE: ${{ github.ref == 'refs/heads/master' && 'enforce' || 'warn' }}
+    steps:
+      - name: "Check out Git repository"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #v4.2.2
+      - name: "Prepare BridgedAI evidence workspace"
+        run: mkdir -p .bridgedai
+      - name: "BridgedAI Auth"
+        id: bridgedai-auth
+        uses: bridgedai-devsecops/auth-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          audience: bridgedai-github-actions
+          bridgedai-token: ${{ secrets.BRIDGEDAI_API_KEY || secrets.BRIDGEDAI_TOKEN }}
+          auth-mode: ${{ (secrets.BRIDGEDAI_API_KEY != '' || secrets.BRIDGEDAI_TOKEN != '') && 'api-key' || 'oidc' }}
+          use-github-oidc: true
+          fail-on-auth-error: true
+          signals-file: .bridgedai/signals.jsonl
+      - name: "BridgedAI Collect Context"
+        id: bridgedai-collect-context
+        uses: bridgedai-devsecops/collect-context-action@v0.0.6-beta
+        with:
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          output-file: .bridgedai/context.json
+          signals-file: .bridgedai/signals.jsonl
+          emit-demo-signals: false
+      - name: "BridgedAI Register Runner"
+        id: bridgedai-register-runner
+        uses: bridgedai-devsecops/register-runner-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          mode: production
+          fail-on-error: false
+          emit-demo-signals: false
+      - name: "BridgedAI Register Build"
+        id: bridgedai-register-build
+        uses: bridgedai-devsecops/register-build-action@v0.0.5-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          workflow-name: ${{ github.workflow }}
+          workflow-path: .github/workflows/ci.yml
+          status: in_progress
+      - name: "BridgedAI Subject"
+        id: bridgedai-subject
+        uses: bridgedai-devsecops/subject-action@v0.0.6-beta
+        with:
+          subject: package.json
+          subject-type: file
+      - name: "BridgedAI Register Artifact"
+        id: bridgedai-register-artifact
+        uses: bridgedai-devsecops/register-artifact-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          runner-id: ${{ steps.bridgedai-register-runner.outputs.runner-id }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          artifact-name: ${{ github.event.repository.name }}
+          artifact-type: source_archive
+          artifact-path: package.json
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          mode: production
+          fail-on-error: false
+          emit-demo-signals: false
+      - name: "BridgedAI SBOM"
+        id: bridgedai-sbom
+        uses: bridgedai-devsecops/sbom-action@v0.0.6-beta
+        with:
+          subject: .
+          subject-type: file
+          format: spdx-json
+          output-file: .bridgedai/sbom.spdx.json
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          emit-demo-signals: false
+          fail-on-error: true
+      - name: "Trivy filesystem vulnerability scan"
+        id: trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: .bridgedai/trivy-results.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: 0
+      - name: "Synthesize BridgedAI build and vulnerability signals"
+        env:
+          BRIDGEDAI_SIGNAL_FILE: .bridgedai/signals.jsonl
+          BRIDGEDAI_TRIVY_JSON: .bridgedai/trivy-results.json
+          BRIDGEDAI_ORG_ID: ${{ env.BRIDGEDAI_ORG_ID }}
+          BRIDGEDAI_PROJECT_ID: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          BRIDGEDAI_ARTIFACT_DIGEST: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          BRIDGEDAI_ARTIFACT_NAME: ${{ github.event.repository.name }}
+          BRIDGEDAI_ARTIFACT_TYPE: source_archive
+          BRIDGEDAI_NEEDS_JSON: ${{ toJson(needs) }}
+          BRIDGEDAI_ENVIRONMENT: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+        run: node .github/scripts/bridgedai-signals.mjs
+      - name: "BridgedAI Attest"
+        id: bridgedai-attest
+        uses: bridgedai-devsecops/attest-action@v0.0.6-beta
+        with:
+          subject-name: ${{ steps.bridgedai-subject.outputs.subject-name }}
+          subject-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          predicate-type: https://spdx.dev/Document
+          predicate-file: .bridgedai/sbom.spdx.json
+          attestation-file: .bridgedai/attestation.json
+          mode: create-only
+      - name: "GitHub artifact attestation"
+        id: github-attestation
+        uses: actions/attest-build-provenance@v2
+        continue-on-error: true
+        with:
+          subject-path: package.json
+      - name: "BridgedAI Upload Evidence"
+        id: bridgedai-upload-evidence
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          artifact-name: ${{ github.event.repository.name }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          sbom-path: .bridgedai/sbom.spdx.json
+          attestation-path: .bridgedai/attestation.json
+          signal-file: .bridgedai/signals.jsonl
+          evidence-file: .bridgedai/context.json
+          resolve-build: false
+          emit-demo-signals: false
+          fail-on-upload-error: true
+      - name: "BridgedAI Verify Evidence"
+        if: ${{ steps.bridgedai-auth.outputs.api-key != '' }}
+        id: bridgedai-verify-evidence
+        uses: bridgedai-devsecops/verify-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          mode: build-summary
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          offline: false
+          fail-on-not-verified: false
+      - name: "BridgedAI Evaluate Policy"
+        id: bridgedai-evaluate-policy
+        uses: bridgedai-devsecops/evaluate-policy-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          policy: ${{ env.BRIDGEDAI_POLICY }}
+          environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+      - name: "BridgedAI Release Gate"
+        id: bridgedai-release-gate
+        uses: bridgedai-devsecops/release-gate-action@v0.0.6-beta
+        with:
+          integration: local
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          decision: ${{ steps.bridgedai-evaluate-policy.outputs.decision }}
+          score: ${{ steps.bridgedai-evaluate-policy.outputs.score }}
+          reason: ${{ steps.bridgedai-evaluate-policy.outputs.reason }}
+          mode: ${{ env.BRIDGEDAI_GATE_MODE }}
+          policy-id: ${{ env.BRIDGEDAI_POLICY }}
+          policy-result-file: ${{ steps.bridgedai-evaluate-policy.outputs.policy-result-file }}
+          fail-on-deny: true
+      - name: "BridgedAI Deployment Guard"
+        id: bridgedai-deployment-guard
+        uses: bridgedai-devsecops/deployment-guard-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+          gate-mode: ${{ env.BRIDGEDAI_GATE_MODE }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          policy-id: ${{ env.BRIDGEDAI_POLICY }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+      - name: "BridgedAI Register Deployment"
+        id: bridgedai-register-deployment
+        uses: bridgedai-devsecops/register-deployment-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+          digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          service: ${{ github.event.repository.name }}
+          policy-result-id: ${{ steps.bridgedai-evaluate-policy.outputs.policy-result-id }}
+          deployment-system: github-actions
+          status: ${{ needs.e2e-test.result == 'success' && needs.docker-test.result == 'success' && 'completed' || 'failed' }}
+          mode: observe
+          emit-demo-signals: false
+      - name: "BridgedAI Upload Governance Decision Signals"
+        id: bridgedai-upload-governance-signals
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          signal-file: .bridgedai/signals.jsonl
+          resolve-build: false
+          emit-demo-signals: false
+          fail-on-upload-error: true
   docker:
     if: github.repository == 'juice-shop/juice-shop' && github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master')
-    needs: [frontend-test, server-test, api-test, e2e-test, custom-config-test, docker-test]
+    needs: [frontend-test, server-test, api-test, e2e-test, custom-config-test, docker-test, bridgedai-governance]
     runs-on: ubuntu-latest
     steps:
       - name: "Check out Git repository"
@@ -349,7 +624,7 @@ jobs:
             CYCLONEDX_NPM_VERSION=${{ env.CYCLONEDX_NPM_VERSION }}
   heroku:
     if: github.repository == 'juice-shop/juice-shop' && github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master')
-    needs: [frontend-test, server-test, api-test, e2e-test, custom-config-test]
+    needs: [frontend-test, server-test, api-test, e2e-test, custom-config-test, bridgedai-governance]
     runs-on: ubuntu-latest
     steps:
       - name: "Check out Git repository"
@@ -376,6 +651,7 @@ jobs:
     if: github.repository == 'juice-shop/juice-shop' && github.event_name == 'push' && (success() || failure())
     needs:
       - docker
+      - bridgedai-governance
       - heroku
       - lint
       - coding-challenge-rsn
