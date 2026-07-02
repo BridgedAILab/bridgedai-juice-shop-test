@@ -19,13 +19,21 @@ on:
         description: "Release policy id or name"
         required: false
         type: string
-        default: "default-release-gate"
+        default: "release-governance-standard"
+      project-id:
+        description: "BridgedAI project id (proj_...)"
+        required: false
+        type: string
+        default: "proj_18139069-31bb-468f-8477-dc36cd54b33d"
     secrets:
+      BRIDGEDAI_API_KEY:
+        required: false
       BRIDGEDAI_TOKEN:
-        required: true
+        required: false
 permissions:
   contents: read
   id-token: write
+  attestations: write
 jobs:
   bridgedai-gate:
     name: BridgedAI Release Gate
@@ -41,9 +49,11 @@ jobs:
         with:
           api-url: ${{ inputs.bridgedai-api-url }}
           tenant: ${{ inputs.organization-id }}
+          organization-id: ${{ inputs.organization-id }}
           audience: bridgedai-github-actions
-          bridgedai-token: ${{ secrets.BRIDGEDAI_TOKEN }}
-          auth-mode: api-key
+          bridgedai-token: ${{ secrets.BRIDGEDAI_API_KEY || secrets.BRIDGEDAI_TOKEN }}
+          auth-mode: ${{ (secrets.BRIDGEDAI_API_KEY != '' || secrets.BRIDGEDAI_TOKEN != '') && 'api-key' || 'oidc' }}
+          use-github-oidc: true
           fail-on-auth-error: true
       - name: BridgedAI Collect Context
         id: bridgedai-collect-context
@@ -56,11 +66,28 @@ jobs:
         uses: bridgedai-devsecops/register-runner-action@v0.0.6-beta
         with:
           api-url: ${{ inputs.bridgedai-api-url }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
           api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
           organization-id: ${{ inputs.organization-id }}
-          project-id: proj_18139069-31bb-468f-8477-dc36cd54b33d
+          project-id: ${{ inputs.project-id }}
           mode: production
           fail-on-error: false
+          emit-demo-signals: false
+      - name: BridgedAI Register Build
+        id: bridgedai-register-build
+        uses: bridgedai-devsecops/register-build-action@v0.0.6-beta
+        with:
+          api-base: ${{ inputs.bridgedai-api-url }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ inputs.organization-id }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          workflow-name: ${{ github.workflow }}
+          workflow-path: .github/workflows/bridgedai-release-gate.yml
+          status: in_progress
       - name: BridgedAI Subject
         id: bridgedai-subject
         uses: bridgedai-devsecops/subject-action@v0.0.6-beta
@@ -72,16 +99,19 @@ jobs:
         uses: bridgedai-devsecops/register-artifact-action@v0.0.6-beta
         with:
           api-url: ${{ inputs.bridgedai-api-url }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
           api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
           organization-id: ${{ inputs.organization-id }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
           artifact-name: ${{ github.event.repository.name }}
           artifact-type: source_manifest
           artifact-path: package.json
           artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
-          project-id: proj_18139069-31bb-468f-8477-dc36cd54b33d
+          project-id: ${{ inputs.project-id }}
           runner-id: ${{ steps.bridgedai-register-runner.outputs.runner-id }}
           mode: production
           fail-on-error: false
+          emit-demo-signals: false
       - name: BridgedAI SBOM
         id: bridgedai-sbom
         uses: bridgedai-devsecops/sbom-action@v0.0.6-beta
@@ -91,6 +121,8 @@ jobs:
           format: spdx-json
           output-file: .bridgedai/sbom.spdx.json
           organization-id: ${{ inputs.organization-id }}
+          emit-demo-signals: false
+          fail-on-error: true
       - name: BridgedAI Attest
         id: bridgedai-attest
         uses: bridgedai-devsecops/attest-action@v0.0.6-beta
@@ -106,21 +138,26 @@ jobs:
         uses: bridgedai-devsecops/upload-evidence-action@v0.0.6-beta
         with:
           api-base: ${{ inputs.bridgedai-api-url }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
           api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
           org-id: ${{ inputs.organization-id }}
           repo-full-name: ${{ github.repository }}
           workflow-run-id: ${{ github.run_id }}
           commit-sha: ${{ github.sha }}
           branch: ${{ github.ref_name }}
-          project-id: proj_18139069-31bb-468f-8477-dc36cd54b33d
+          project-id: ${{ inputs.project-id }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
           artifact-name: ${{ github.event.repository.name }}
           artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
           sbom-path: .bridgedai/sbom.spdx.json
           attestation-path: .bridgedai/attestation.json
           signal-file: .bridgedai/signals.jsonl
-          resolve-build: true
+          evidence-file: .bridgedai/context.json
+          resolve-build: false
+          emit-demo-signals: false
           fail-on-upload-error: true
       - name: BridgedAI Verify Evidence
+        if: ${{ steps.bridgedai-auth.outputs.api-key != '' }}
         id: bridgedai-verify-evidence
         uses: bridgedai-devsecops/verify-evidence-action@v0.0.6-beta
         with:
@@ -128,7 +165,7 @@ jobs:
           api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
           org-id: ${{ inputs.organization-id }}
           mode: build-summary
-          build-id: ${{ steps.bridgedai-upload-evidence.outputs.build-id }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
           offline: false
           fail-on-not-verified: false
       - name: BridgedAI Evaluate Policy
@@ -143,6 +180,7 @@ jobs:
           workflow-run-id: ${{ github.run_id }}
           commit-sha: ${{ github.sha }}
           branch: ${{ github.ref_name }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
           artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
           policy: ${{ inputs.policy }}
           environment: ${{ inputs.environment }}
@@ -168,12 +206,12 @@ jobs:
           gate-mode: warn
           artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
           policy-id: ${{ inputs.policy }}
-          build-id: ${{ steps.bridgedai-upload-evidence.outputs.build-id }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
           repo-full-name: ${{ github.repository }}
           workflow-run-id: ${{ github.run_id }}
           commit-sha: ${{ github.sha }}
           branch: ${{ github.ref_name }}
-          project-id: proj_18139069-31bb-468f-8477-dc36cd54b33d
+          project-id: ${{ inputs.project-id }}
       - name: Deploy
         run: echo "Deploy to ${{ inputs.environment }}"
       - name: BridgedAI Register Deployment
@@ -190,3 +228,23 @@ jobs:
           policy-result-id: ${{ steps.bridgedai-evaluate-policy.outputs.policy-result-id }}
           deployment-system: github-actions
           status: completed
+          mode: observe
+          emit-demo-signals: false
+      - name: BridgedAI Upload Governance Decision Signals
+        id: bridgedai-upload-governance-signals
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ inputs.bridgedai-api-url }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ inputs.organization-id }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ inputs.project-id }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          signal-file: .bridgedai/signals.jsonl
+          resolve-build: false
+          emit-demo-signals: false
+          fail-on-upload-error: true
