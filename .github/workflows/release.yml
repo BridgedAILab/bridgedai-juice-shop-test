@@ -61,7 +61,302 @@ jobs:
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  bridgedai-release-governance:
+    name: "BridgedAI release governance"
+    needs: package
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      security-events: read
+    env:
+      BRIDGEDAI_API_URL: ${{ vars.BRIDGEDAI_API_URL || 'https://api.bridgedai.io' }}
+      BRIDGEDAI_ORG_ID: ${{ vars.BRIDGEDAI_ORG_ID || 'org_a402b4f0-ac68-4d15-91de-44cc67ce3ebd' }}
+      BRIDGEDAI_PROJECT_ID: ${{ vars.BRIDGEDAI_PROJECT_ID || 'proj_18139069-31bb-468f-8477-dc36cd54b33d' }}
+      BRIDGEDAI_POLICY: ${{ vars.BRIDGEDAI_POLICY || 'release-governance-standard' }}
+      BRIDGEDAI_ENVIRONMENT: Production
+      BRIDGEDAI_GATE_MODE: enforce
+    steps:
+      - name: "Check out Git repository"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 #v4.2.2
+      - name: "Prepare BridgedAI evidence workspace"
+        run: mkdir -p .bridgedai
+      - name: "Use Node.js"
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af #v4.1.0
+        with:
+          node-version: 24
+      - name: "Install release packaging tools"
+        run: |
+          npm install -g typescript@${{ env.TYPESCRIPT_VERSION }}
+          npm install -g @cyclonedx/cyclonedx-npm@${{ env.CYCLONEDX_NPM_VERSION }}
+          npm install -g grunt-cli
+      - name: "Package release candidate for governance evidence"
+        run: |
+          echo "PCKG_OS_NAME=linux" >> $GITHUB_ENV
+          echo "PCKG_CPU_ARCH=x64" >> $GITHUB_ENV
+          echo "PCKG_NODE_VERSION=24" >> $GITHUB_ENV
+          npm install --production
+          npm run package:ci
+      - name: "Locate release package"
+        id: release-package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find dist -maxdepth 1 -type f \( -name '*.tgz' -o -name '*.zip' \) | sort | head -n 1)"
+          if [ -z "$archive" ]; then
+            echo "No release package found in dist" >&2
+            exit 1
+          fi
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+      - name: "BridgedAI Auth"
+        id: bridgedai-auth
+        uses: bridgedai-devsecops/auth-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          audience: bridgedai-github-actions
+          bridgedai-token: ${{ secrets.BRIDGEDAI_API_KEY || secrets.BRIDGEDAI_TOKEN }}
+          auth-mode: ${{ (secrets.BRIDGEDAI_API_KEY != '' || secrets.BRIDGEDAI_TOKEN != '') && 'api-key' || 'oidc' }}
+          use-github-oidc: true
+          fail-on-auth-error: true
+          signals-file: .bridgedai/signals.jsonl
+      - name: "BridgedAI Collect Context"
+        id: bridgedai-collect-context
+        uses: bridgedai-devsecops/collect-context-action@v0.0.6-beta
+        with:
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          output-file: .bridgedai/context.json
+          signals-file: .bridgedai/signals.jsonl
+          emit-demo-signals: false
+      - name: "BridgedAI Register Runner"
+        id: bridgedai-register-runner
+        uses: bridgedai-devsecops/register-runner-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          mode: production
+          fail-on-error: false
+          emit-demo-signals: false
+      - name: "BridgedAI Register Build"
+        id: bridgedai-register-build
+        uses: bridgedai-devsecops/register-build-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          workflow-name: ${{ github.workflow }}
+          workflow-path: .github/workflows/release.yml
+          status: in_progress
+      - name: "BridgedAI Subject"
+        id: bridgedai-subject
+        uses: bridgedai-devsecops/subject-action@v0.0.6-beta
+        with:
+          subject: ${{ steps.release-package.outputs.path }}
+          subject-type: file
+      - name: "BridgedAI Register Artifact"
+        id: bridgedai-register-artifact
+        uses: bridgedai-devsecops/register-artifact-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          runner-id: ${{ steps.bridgedai-register-runner.outputs.runner-id }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          artifact-name: ${{ steps.release-package.outputs.path }}
+          artifact-type: source_archive
+          artifact-path: ${{ steps.release-package.outputs.path }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          mode: production
+          fail-on-error: false
+          emit-demo-signals: false
+      - name: "BridgedAI SBOM"
+        id: bridgedai-sbom
+        uses: bridgedai-devsecops/sbom-action@v0.0.6-beta
+        with:
+          subject: .
+          subject-type: file
+          format: spdx-json
+          output-file: .bridgedai/sbom.spdx.json
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          emit-demo-signals: false
+          fail-on-error: true
+      - name: "Trivy release vulnerability scan"
+        id: trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: .bridgedai/trivy-results.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: 0
+      - name: "Synthesize BridgedAI release and vulnerability signals"
+        env:
+          BRIDGEDAI_SIGNAL_FILE: .bridgedai/signals.jsonl
+          BRIDGEDAI_TRIVY_JSON: .bridgedai/trivy-results.json
+          BRIDGEDAI_ORG_ID: ${{ env.BRIDGEDAI_ORG_ID }}
+          BRIDGEDAI_PROJECT_ID: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          BRIDGEDAI_ARTIFACT_DIGEST: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          BRIDGEDAI_ARTIFACT_NAME: ${{ steps.release-package.outputs.path }}
+          BRIDGEDAI_ARTIFACT_TYPE: source_archive
+          BRIDGEDAI_NEEDS_JSON: ${{ toJson(needs) }}
+          BRIDGEDAI_ENVIRONMENT: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+        run: node .github/scripts/bridgedai-signals.mjs
+      - name: "BridgedAI Attest"
+        id: bridgedai-attest
+        uses: bridgedai-devsecops/attest-action@v0.0.6-beta
+        with:
+          subject-name: ${{ steps.bridgedai-subject.outputs.subject-name }}
+          subject-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          predicate-type: https://spdx.dev/Document
+          predicate-file: .bridgedai/sbom.spdx.json
+          attestation-file: .bridgedai/attestation.json
+          mode: create-only
+      - name: "GitHub release package attestation"
+        id: github-attestation
+        uses: actions/attest-build-provenance@v2
+        continue-on-error: true
+        with:
+          subject-path: ${{ steps.release-package.outputs.path }}
+      - name: "BridgedAI Upload Release Evidence"
+        id: bridgedai-upload-evidence
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          artifact-name: ${{ steps.release-package.outputs.path }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          sbom-path: .bridgedai/sbom.spdx.json
+          attestation-path: .bridgedai/attestation.json
+          signal-file: .bridgedai/signals.jsonl
+          evidence-file: .bridgedai/context.json
+          resolve-build: false
+          emit-demo-signals: false
+          fail-on-upload-error: true
+      - name: "BridgedAI Verify Release Evidence"
+        if: ${{ steps.bridgedai-auth.outputs.api-key != '' }}
+        id: bridgedai-verify-evidence
+        uses: bridgedai-devsecops/verify-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          mode: build-summary
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          offline: false
+          fail-on-not-verified: true
+      - name: "BridgedAI Evaluate Release Policy"
+        id: bridgedai-evaluate-policy
+        uses: bridgedai-devsecops/evaluate-policy-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          policy: ${{ env.BRIDGEDAI_POLICY }}
+          environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+      - name: "BridgedAI Release Gate"
+        id: bridgedai-release-gate
+        uses: bridgedai-devsecops/release-gate-action@v0.0.6-beta
+        with:
+          integration: local
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          decision: ${{ steps.bridgedai-evaluate-policy.outputs.decision }}
+          score: ${{ steps.bridgedai-evaluate-policy.outputs.score }}
+          reason: ${{ steps.bridgedai-evaluate-policy.outputs.reason }}
+          mode: ${{ env.BRIDGEDAI_GATE_MODE }}
+          policy-id: ${{ env.BRIDGEDAI_POLICY }}
+          policy-result-file: ${{ steps.bridgedai-evaluate-policy.outputs.policy-result-file }}
+          fail-on-deny: true
+      - name: "BridgedAI Deployment Guard"
+        id: bridgedai-deployment-guard
+        uses: bridgedai-devsecops/deployment-guard-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+          gate-mode: ${{ env.BRIDGEDAI_GATE_MODE }}
+          artifact-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          policy-id: ${{ env.BRIDGEDAI_POLICY }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+      - name: "BridgedAI Register Release Deployment"
+        id: bridgedai-register-deployment
+        uses: bridgedai-devsecops/register-deployment-action@v0.0.6-beta
+        with:
+          api-url: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          tenant: ${{ env.BRIDGEDAI_ORG_ID }}
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
+          digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
+          service: ${{ github.event.repository.name }}
+          policy-result-id: ${{ steps.bridgedai-evaluate-policy.outputs.policy-result-id }}
+          deployment-system: github-actions
+          status: ${{ needs.package.result == 'success' && 'completed' || 'failed' }}
+          mode: observe
+          emit-demo-signals: false
+      - name: "BridgedAI Upload Release Decision Signals"
+        id: bridgedai-upload-governance-signals
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.6-beta
+        with:
+          api-base: ${{ env.BRIDGEDAI_API_URL }}
+          access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
+          api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
+          org-id: ${{ env.BRIDGEDAI_ORG_ID }}
+          repo-full-name: ${{ github.repository }}
+          workflow-run-id: ${{ github.run_id }}
+          commit-sha: ${{ github.sha }}
+          branch: ${{ github.ref_name }}
+          project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
+          build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
+          signal-file: .bridgedai/signals.jsonl
+          resolve-build: false
+          emit-demo-signals: false
+          fail-on-upload-error: true
   docker:
+    needs: bridgedai-release-governance
     runs-on: ubuntu-latest
     steps:
       - name: "Check out Git repository"
@@ -99,6 +394,7 @@ jobs:
     if: always()
     needs:
       - package
+      - bridgedai-release-governance
       - docker
     runs-on: ubuntu-latest
     steps:
