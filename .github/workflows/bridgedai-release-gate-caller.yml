@@ -1,0 +1,18 @@
+name: BridgedAI Release Gate (Caller)
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bridgedai-gate:
+    name: Run BridgedAI Release Gate
+    uses: ./.github/workflows/bridgedai-release-gate.yml
+    with:
+      environment: Production
+      organization-id: org_a402b4f0-ac68-4d15-91de-44cc67ce3ebd
+      bridgedai-api-url: https://api.bridgedai.io
+      policy: default-release-gate
+    secrets:
+      BRIDGEDAI_TOKEN: ${{ secrets.BRIDGEDAI_TOKEN }}
