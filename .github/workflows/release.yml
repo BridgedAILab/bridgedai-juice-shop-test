@@ -112,7 +112,7 @@ jobs:
           echo "path=$archive" >> "$GITHUB_OUTPUT"
       - name: "BridgedAI Auth"
         id: bridgedai-auth
-        uses: bridgedai-devsecops/auth-action@v0.0.8-beta
+        uses: bridgedai-devsecops/auth-action@v0.0.9-beta
         with:
           api-url: ${{ env.BRIDGEDAI_API_URL }}
           tenant: ${{ env.BRIDGEDAI_ORG_ID }}
@@ -125,7 +125,7 @@ jobs:
           signals-file: .bridgedai/signals.jsonl
       - name: "BridgedAI Collect Context"
         id: bridgedai-collect-context
-        uses: bridgedai-devsecops/collect-context-action@v0.0.8-beta
+        uses: bridgedai-devsecops/collect-context-action@v0.0.9-beta
         with:
           organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
           output-file: .bridgedai/context.json
@@ -133,7 +133,7 @@ jobs:
           emit-demo-signals: false
       - name: "BridgedAI Register Runner"
         id: bridgedai-register-runner
-        uses: bridgedai-devsecops/register-runner-action@v0.0.8-beta
+        uses: bridgedai-devsecops/register-runner-action@v0.0.9-beta
         with:
           api-url: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -145,7 +145,7 @@ jobs:
           emit-demo-signals: false
       - name: "BridgedAI Register Build"
         id: bridgedai-register-build
-        uses: bridgedai-devsecops/register-build-action@v0.0.8-beta
+        uses: bridgedai-devsecops/register-build-action@v0.0.9-beta
         with:
           api-base: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -160,13 +160,14 @@ jobs:
           status: in_progress
       - name: "BridgedAI Subject"
         id: bridgedai-subject
-        uses: bridgedai-devsecops/subject-action@v0.0.8-beta
+        uses: bridgedai-devsecops/subject-action@v0.0.9-beta
         with:
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
           subject: ${{ steps.release-package.outputs.path }}
           subject-type: file
       - name: "BridgedAI Register Artifact"
         id: bridgedai-register-artifact
-        uses: bridgedai-devsecops/register-artifact-action@v0.0.8-beta
+        uses: bridgedai-devsecops/register-artifact-action@v0.0.9-beta
         with:
           api-url: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -175,10 +176,6 @@ jobs:
           project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
           build-id: ${{ steps.bridgedai-register-build.outputs.build-id }}
           runner-id: ${{ steps.bridgedai-register-runner.outputs.runner-id }}
-          repo-full-name: ${{ github.repository }}
-          workflow-run-id: ${{ github.run_id }}
-          commit-sha: ${{ github.sha }}
-          branch: ${{ github.ref_name }}
           artifact-name: ${{ steps.release-package.outputs.path }}
           artifact-type: source_archive
           artifact-path: ${{ steps.release-package.outputs.path }}
@@ -188,7 +185,7 @@ jobs:
           emit-demo-signals: false
       - name: "BridgedAI SBOM"
         id: bridgedai-sbom
-        uses: bridgedai-devsecops/sbom-action@v0.0.8-beta
+        uses: bridgedai-devsecops/sbom-action@v0.0.9-beta
         with:
           subject: .
           subject-type: file
@@ -222,8 +219,9 @@ jobs:
         run: node .github/scripts/bridgedai-signals.mjs
       - name: "BridgedAI Attest"
         id: bridgedai-attest
-        uses: bridgedai-devsecops/attest-action@v0.0.8-beta
+        uses: bridgedai-devsecops/attest-action@v0.0.9-beta
         with:
+          organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
           subject-name: ${{ steps.bridgedai-subject.outputs.subject-name }}
           subject-digest: ${{ steps.bridgedai-subject.outputs.subject-digest }}
           predicate-type: https://spdx.dev/Document
@@ -238,7 +236,7 @@ jobs:
           subject-path: ${{ steps.release-package.outputs.path }}
       - name: "BridgedAI Upload Release Evidence"
         id: bridgedai-upload-evidence
-        uses: bridgedai-devsecops/upload-evidence-action@v0.0.8-beta
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.9-beta
         with:
           api-base: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -262,7 +260,7 @@ jobs:
       - name: "BridgedAI Verify Release Evidence"
         if: ${{ steps.bridgedai-auth.outputs.api-key != '' }}
         id: bridgedai-verify-evidence
-        uses: bridgedai-devsecops/verify-evidence-action@v0.0.8-beta
+        uses: bridgedai-devsecops/verify-evidence-action@v0.0.9-beta
         with:
           api-base: ${{ env.BRIDGEDAI_API_URL }}
           api-key: ${{ steps.bridgedai-auth.outputs.api-key }}
@@ -273,7 +271,7 @@ jobs:
           fail-on-not-verified: true
       - name: "BridgedAI Evaluate Release Policy"
         id: bridgedai-evaluate-policy
-        uses: bridgedai-devsecops/evaluate-policy-action@v0.0.8-beta
+        uses: bridgedai-devsecops/evaluate-policy-action@v0.0.9-beta
         with:
           api-url: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -290,7 +288,7 @@ jobs:
           environment: ${{ env.BRIDGEDAI_ENVIRONMENT }}
       - name: "BridgedAI Release Gate"
         id: bridgedai-release-gate
-        uses: bridgedai-devsecops/release-gate-action@v0.0.8-beta
+        uses: bridgedai-devsecops/release-gate-action@v0.0.9-beta
         with:
           integration: local
           organization-id: ${{ env.BRIDGEDAI_ORG_ID }}
@@ -303,7 +301,7 @@ jobs:
           fail-on-deny: true
       - name: "BridgedAI Deployment Guard"
         id: bridgedai-deployment-guard
-        uses: bridgedai-devsecops/deployment-guard-action@v0.0.8-beta
+        uses: bridgedai-devsecops/deployment-guard-action@v0.0.9-beta
         with:
           api-url: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -322,7 +320,7 @@ jobs:
           project-id: ${{ env.BRIDGEDAI_PROJECT_ID }}
       - name: "BridgedAI Register Release Deployment"
         id: bridgedai-register-deployment
-        uses: bridgedai-devsecops/register-deployment-action@v0.0.8-beta
+        uses: bridgedai-devsecops/register-deployment-action@v0.0.9-beta
         with:
           api-url: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
@@ -339,7 +337,7 @@ jobs:
           emit-demo-signals: false
       - name: "BridgedAI Upload Release Decision Signals"
         id: bridgedai-upload-governance-signals
-        uses: bridgedai-devsecops/upload-evidence-action@v0.0.8-beta
+        uses: bridgedai-devsecops/upload-evidence-action@v0.0.9-beta
         with:
           api-base: ${{ env.BRIDGEDAI_API_URL }}
           access-token: ${{ steps.bridgedai-auth.outputs.access-token }}
